@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Install the Parakeet engine into Talon on macOS / Linux.
-# Symlinks this repo's plugin/ into ~/.talon/user/parakeet and sets up a venv.
+# Symlinks this repo's plugin/ into ~/.talon/user/parakeet and builds the Rust sidecar.
 
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_dir="$(cd "$script_dir/.." && pwd)"
 plugin_src="$repo_dir/plugin"
+sidecar_dir="$repo_dir/sidecar-rs"
 talon_user="$HOME/.talon/user"
 target="$talon_user/parakeet"
 
@@ -15,8 +16,8 @@ if [[ ! -d "$HOME/.talon" ]]; then
   exit 1
 fi
 
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "error: python3 not on PATH." >&2
+if ! command -v cargo >/dev/null 2>&1; then
+  echo "error: cargo not on PATH. Install Rust from https://rustup.rs and re-run." >&2
   exit 1
 fi
 
@@ -37,16 +38,17 @@ else
   echo "linked $target -> $plugin_src"
 fi
 
-venv_dir="$plugin_src/.venv"
-if [[ ! -x "$venv_dir/bin/python" ]]; then
-  echo "creating venv at $venv_dir"
-  python3 -m venv "$venv_dir"
-fi
+echo "building sidecar (cargo build --release)"
+( cd "$sidecar_dir" && cargo build --release )
 
-"$venv_dir/bin/pip" install --upgrade pip
-"$venv_dir/bin/pip" install -r "$plugin_src/requirements.txt"
+bin="$sidecar_dir/target/release/parakeet-sidecar"
+if [[ ! -x "$bin" ]]; then
+  echo "error: expected binary at $bin" >&2
+  exit 1
+fi
 
 echo
 echo "done."
+echo "binary: $bin ($(du -h "$bin" | cut -f1))"
 echo "restart Talon (or 'touch $plugin_src/engine.py') to activate."
-echo "select 'parakeet' in the tray Active Engine menu if it doesn't auto-pick."
+echo "on first run the sidecar downloads ~480 MB of Parakeet model weights."
