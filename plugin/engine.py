@@ -203,6 +203,10 @@ class ParakeetEngine(DummyEngine):
                 self._sidecar_ready = True
                 log.info("parakeet: sidecar ready")
                 try:
+                    speech_system.dispatch("update_engines")
+                except Exception:
+                    log.exception("parakeet: update_engines dispatch failed")
+                try:
                     speech_system.pick_engine()
                 except Exception:
                     log.exception("parakeet: pick_engine failed")
@@ -244,6 +248,13 @@ def _register_once():
     speech_system.add_engine(engine)
     _REGISTERED = True
     log.info("parakeet: registered")
+    # Nudge the tray menu so the new engine shows up in the Active Engine dropdown.
+    # On some builds `add_engine` doesn't auto-fire `update_engines`, and the menu
+    # stays stale until Talon restarts.
+    try:
+        speech_system.dispatch("update_engines")
+    except Exception:
+        log.exception("parakeet: update_engines dispatch failed")
     proxy = speech_system.engines.get(engine)
     if proxy is not None:
         try:
