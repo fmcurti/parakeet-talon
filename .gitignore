@@ -7,4 +7,3 @@ models/
 sidecar-rs/target/
 sidecar-rs/models/
 plugin/models/
-parakeet.env
