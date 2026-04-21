@@ -1,0 +1,20 @@
+[package]
+name = "parakeet-sidecar"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+parakeet-rs = "0.3"
+cpal = "0.15"
+rubato = "0.15"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+crossbeam-channel = "0.5"
+reqwest = { version = "0.12", features = ["blocking", "stream"] }
+dotenvy = "0.15"
+
+[profile.release]
+lto = true
+strip = true
+opt-level = 3

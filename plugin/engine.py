@@ -2,17 +2,12 @@ r"""
 Parakeet STT engine for Talon.
 
 Registers a custom AbstractEngine subclass that delegates recognition to an
-external Parakeet sidecar process (onnx-asr). On each recognized phrase,
-routes text through speech_system so Talon's grammar and action pipeline
-runs unchanged.
+external Rust sidecar (parakeet-rs based). On each recognized phrase, routes
+text through speech_system so Talon's grammar and action pipeline runs
+unchanged.
 
-Setup (one-time):
-  cd ~/.talon/user/parakeet     (mac)  or  %APPDATA%\talon\user\parakeet  (win)
-  python3 -m venv .venv
-  .venv/bin/pip install -r requirements.txt
-  # model is auto-downloaded on first recognition: nemo-parakeet-tdt-0.6b-v2
-
-After setup, restart Talon and pick "parakeet" from the tray Active Engine menu.
+Install via scripts/install.sh (macOS/Linux) or scripts/install.ps1 (Windows).
+After install, restart Talon; the engine auto-registers and auto-picks.
 """
 
 import json
@@ -30,13 +25,14 @@ from talon.engines.dummy import DummyEngine
 
 log = logging.getLogger("parakeet")
 
+# Plugin lives at <repo>/plugin/engine.py (when installed via script, this path
+# is reached through a symlink at <talon_user>/parakeet). resolve() follows the
+# symlink so SIDECAR_BIN points inside the repo.
 PLUGIN_DIR = Path(__file__).resolve().parent
-SIDECAR_SCRIPT = PLUGIN_DIR / "sidecar.py"
+REPO_DIR = PLUGIN_DIR.parent
 
-if sys.platform == "win32":
-    VENV_PY = PLUGIN_DIR / ".venv" / "Scripts" / "python.exe"
-else:
-    VENV_PY = PLUGIN_DIR / ".venv" / "bin" / "python"
+_BIN_NAME = "parakeet-sidecar.exe" if sys.platform == "win32" else "parakeet-sidecar"
+SIDECAR_BIN = REPO_DIR / "sidecar-rs" / "target" / "release" / _BIN_NAME
 
 _KEEP_RE = re.compile(r"[^a-z0-9\s-]+")
 _WS_RE = re.compile(r"\s+")
@@ -109,18 +105,15 @@ class ParakeetEngine(DummyEngine):
             log.exception("parakeet: mimic dispatch failed")
 
     def _spawn(self):
-        if not VENV_PY.exists():
+        if not SIDECAR_BIN.exists():
             log.error(
-                f"parakeet: sidecar venv python missing at {VENV_PY}; "
-                f"run `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt` in {PLUGIN_DIR}"
+                f"parakeet: sidecar binary missing at {SIDECAR_BIN}; "
+                f"run `cargo build --release` in {REPO_DIR / 'sidecar-rs'} or re-run the install script"
             )
-            return
-        if not SIDECAR_SCRIPT.exists():
-            log.error(f"parakeet: sidecar script missing at {SIDECAR_SCRIPT}")
             return
         try:
             self._proc = subprocess.Popen(
-                [str(VENV_PY), "-u", str(SIDECAR_SCRIPT)],
+                [str(SIDECAR_BIN)],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,

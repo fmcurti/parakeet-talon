@@ -1,24 +1,23 @@
 # Install the Parakeet engine into Talon on Windows.
-# Junction-links this repo's plugin/ into %APPDATA%\talon\user\parakeet and sets up a venv.
+# Junction-links this repo's plugin/ into %APPDATA%\talon\user\parakeet and builds the Rust sidecar.
 #
 # Run from any directory:   powershell -ExecutionPolicy Bypass -File scripts\install.ps1
 
 $ErrorActionPreference = "Stop"
 
-$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
-$repoDir   = (Resolve-Path (Join-Path $scriptDir "..")).Path
-$pluginSrc = Join-Path $repoDir "plugin"
-$talonUser = Join-Path $env:APPDATA "talon\user"
-$target    = Join-Path $talonUser "parakeet"
+$scriptDir  = Split-Path -Parent $MyInvocation.MyCommand.Definition
+$repoDir    = (Resolve-Path (Join-Path $scriptDir "..")).Path
+$pluginSrc  = Join-Path $repoDir "plugin"
+$sidecarDir = Join-Path $repoDir "sidecar-rs"
+$talonUser  = Join-Path $env:APPDATA "talon\user"
+$target     = Join-Path $talonUser "parakeet"
 
 if (-not (Test-Path (Join-Path $env:APPDATA "talon"))) {
     Write-Error "Talon directory not found at $env:APPDATA\talon. Install Talon first."
 }
 
-$python = Get-Command python -ErrorAction SilentlyContinue
-if (-not $python) { $python = Get-Command py -ErrorAction SilentlyContinue }
-if (-not $python) {
-    Write-Error "python not on PATH. Install Python 3.10+ (https://python.org) and re-run."
+if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
+    Write-Error "cargo not on PATH. Install Rust from https://rustup.rs and re-run."
 }
 
 New-Item -ItemType Directory -Force -Path $talonUser | Out-Null
@@ -26,8 +25,7 @@ New-Item -ItemType Directory -Force -Path $talonUser | Out-Null
 if (Test-Path $target) {
     $item = Get-Item $target -Force
     $isLink = ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0
-    $currentTarget = $null
-    if ($isLink) { $currentTarget = $item.Target | Select-Object -First 1 }
+    $currentTarget = if ($isLink) { $item.Target | Select-Object -First 1 } else { $null }
 
     if ($isLink -and $currentTarget -eq $pluginSrc) {
         Write-Host "link already in place: $target -> $pluginSrc"
@@ -43,17 +41,21 @@ if (Test-Path $target) {
     Write-Host "linked $target -> $pluginSrc"
 }
 
-$venvDir = Join-Path $pluginSrc ".venv"
-$venvPy  = Join-Path $venvDir "Scripts\python.exe"
-if (-not (Test-Path $venvPy)) {
-    Write-Host "creating venv at $venvDir"
-    & $python.Source -m venv $venvDir
+Write-Host "building sidecar (cargo build --release)"
+Push-Location $sidecarDir
+try {
+    & cargo build --release
+    if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
+} finally {
+    Pop-Location
 }
 
-$pip = Join-Path $venvDir "Scripts\pip.exe"
-& $pip install --upgrade pip
-& $pip install -r (Join-Path $pluginSrc "requirements.txt")
+$bin = Join-Path $sidecarDir "target\release\parakeet-sidecar.exe"
+if (-not (Test-Path $bin)) {
+    Write-Error "expected binary at $bin"
+}
 
 Write-Host ""
 Write-Host "done."
-Write-Host "restart Talon to activate, and select 'parakeet' in the tray Active Engine menu if needed."
+Write-Host "binary: $bin"
+Write-Host "restart Talon to activate. On first run the sidecar downloads ~480 MB of model weights."
