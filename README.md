@@ -114,11 +114,6 @@ release assets.
   `PARAKEET_VAD_THRESHOLD` (e.g. `0.002`) for a quieter mic, or check that `cpal` opened
   the right input device in the stderr log.
 
-## Branches
-
-- `main` — Python sidecar version (onnx-asr, heavier, simpler to hack)
-- `rust-sidecar` — this one (Rust sidecar, prebuilt binaries)
-
 ## License
 
 MIT.
