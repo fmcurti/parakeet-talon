@@ -1,0 +1,96 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-apple-darwin
+            asset: parakeet-sidecar-macos-aarch64.tar.gz
+            bin: parakeet-sidecar
+            archive: tar
+          - os: macos-13
+            target: x86_64-apple-darwin
+            asset: parakeet-sidecar-macos-x86_64.tar.gz
+            bin: parakeet-sidecar
+            archive: tar
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            asset: parakeet-sidecar-linux-x86_64.tar.gz
+            bin: parakeet-sidecar
+            archive: tar
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            asset: parakeet-sidecar-windows-x86_64.zip
+            bin: parakeet-sidecar.exe
+            archive: zip
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            sidecar-rs/target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('sidecar-rs/Cargo.lock') }}
+
+      - name: Install Linux audio deps
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+
+      - name: Build
+        working-directory: sidecar-rs
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package (tar)
+        if: matrix.archive == 'tar'
+        working-directory: sidecar-rs/target/${{ matrix.target }}/release
+        run: |
+          tar czf "${{ matrix.asset }}" "${{ matrix.bin }}"
+          shasum -a 256 "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256"
+
+      - name: Package (zip)
+        if: matrix.archive == 'zip'
+        working-directory: sidecar-rs/target/${{ matrix.target }}/release
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "${{ matrix.bin }}" -DestinationPath "${{ matrix.asset }}"
+          $hash = (Get-FileHash -Algorithm SHA256 "${{ matrix.asset }}").Hash.ToLower()
+          "$hash  ${{ matrix.asset }}" | Out-File -Encoding ascii "${{ matrix.asset }}.sha256"
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          files: |
+            sidecar-rs/target/${{ matrix.target }}/release/${{ matrix.asset }}
+            sidecar-rs/target/${{ matrix.target }}/release/${{ matrix.asset }}.sha256
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+
+      - name: Upload artifact (non-tag runs)
+        uses: actions/upload-artifact@v4
+        if: "!startsWith(github.ref, 'refs/tags/v')"
+        with:
+          name: ${{ matrix.asset }}
+          path: sidecar-rs/target/${{ matrix.target }}/release/${{ matrix.asset }}*
