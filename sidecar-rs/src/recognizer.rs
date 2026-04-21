@@ -7,17 +7,67 @@ use std::time::Instant;
 use crate::protocol::Event;
 
 // Chunks arrive from the audio thread at 160 ms each (2560 f32 @ 16 kHz).
-const VAD_ENERGY_THRESHOLD: f32 = 0.005;
-const VAD_START_CHUNKS: u32 = 1;
-const VAD_END_CHUNKS: u32 = 5; // ~800 ms trailing silence
-const MIN_CHUNKS: u32 = 2; //   ~320 ms minimum phrase length
-const MAX_CHUNKS: u32 = 63; //  ~10 s maximum phrase
+const CHUNK_MS: u32 = 160;
+
+/// VAD parameters, tunable at startup via env vars.
+struct VadParams {
+    energy_threshold: f32,
+    start_chunks: u32,
+    end_chunks: u32,
+    min_chunks: u32,
+    max_chunks: u32,
+}
+
+impl VadParams {
+    fn from_env() -> Self {
+        let threshold = env_f32("PARAKEET_VAD_THRESHOLD", 0.005);
+        let start_ms = env_u32("PARAKEET_VAD_START_MS", 160);
+        let end_ms = env_u32("PARAKEET_VAD_END_MS", 800);
+        let min_ms = env_u32("PARAKEET_VAD_MIN_MS", 320);
+        let max_ms = env_u32("PARAKEET_VAD_MAX_MS", 10_000);
+        let p = Self {
+            energy_threshold: threshold,
+            start_chunks: ms_to_chunks(start_ms).max(1),
+            end_chunks: ms_to_chunks(end_ms).max(1),
+            min_chunks: ms_to_chunks(min_ms).max(1),
+            max_chunks: ms_to_chunks(max_ms).max(1),
+        };
+        eprintln!(
+            "[sidecar] vad: threshold={} start={} ms end={} ms min={} ms max={} ms",
+            p.energy_threshold,
+            p.start_chunks * CHUNK_MS,
+            p.end_chunks * CHUNK_MS,
+            p.min_chunks * CHUNK_MS,
+            p.max_chunks * CHUNK_MS,
+        );
+        p
+    }
+}
+
+fn env_u32(name: &str, default: u32) -> u32 {
+    std::env::var(name)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(default)
+}
+
+fn env_f32(name: &str, default: f32) -> f32 {
+    std::env::var(name)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(default)
+}
+
+fn ms_to_chunks(ms: u32) -> u32 {
+    ms.div_ceil(CHUNK_MS)
+}
 
 pub fn run_recognizer<F: Fn(Event)>(
     model_dir: &Path,
     rx: Receiver<Vec<f32>>,
     emit: F,
 ) -> Result<()> {
+    let vad = VadParams::from_env();
     let config = ExecutionConfig::new().with_execution_provider(ExecutionProvider::Cpu);
     let mut parakeet = ParakeetTDT::from_pretrained(model_dir, Some(config))?;
 
@@ -29,12 +79,12 @@ pub fn run_recognizer<F: Fn(Event)>(
 
     while let Ok(chunk) = rx.recv() {
         let r = rms(&chunk);
-        let loud = r >= VAD_ENERGY_THRESHOLD;
+        let loud = r >= vad.energy_threshold;
 
         if !speaking {
             if loud {
                 above_streak += 1;
-                if above_streak >= VAD_START_CHUNKS {
+                if above_streak >= vad.start_chunks {
                     speaking = true;
                     buf.clear();
                     buf.extend_from_slice(&chunk);
@@ -57,7 +107,7 @@ pub fn run_recognizer<F: Fn(Event)>(
             below_streak += 1;
         }
 
-        let ended = below_streak >= VAD_END_CHUNKS || chunks_in_phrase >= MAX_CHUNKS;
+        let ended = below_streak >= vad.end_chunks || chunks_in_phrase >= vad.max_chunks;
         if !ended {
             continue;
         }
@@ -69,7 +119,7 @@ pub fn run_recognizer<F: Fn(Event)>(
         above_streak = 0;
         below_streak = 0;
 
-        if count < MIN_CHUNKS {
+        if count < vad.min_chunks {
             buf.clear();
             continue;
         }
