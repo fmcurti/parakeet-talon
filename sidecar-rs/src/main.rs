@@ -41,27 +41,49 @@ impl Emitter {
     }
 }
 
-fn resolve_model_dir() -> Result<PathBuf> {
-    // Binary lives at <repo>/sidecar-rs/target/release/parakeet-sidecar
-    // Walk up until we find a dir containing "plugin" as a sibling; put models under
-    // <repo>/sidecar-rs/models/parakeet-tdt-v3.
+/// Return the sidecar-rs directory, found by walking up from the binary.
+fn sidecar_root() -> Result<PathBuf> {
     let exe = std::env::current_exe().context("current_exe")?;
     let mut cur = exe.as_path();
     while let Some(parent) = cur.parent() {
         if parent.file_name().map(|n| n == "sidecar-rs").unwrap_or(false) {
-            return Ok(parent.join("models").join("parakeet-tdt-v3"));
+            return Ok(parent.to_path_buf());
         }
         cur = parent;
     }
-    // Fallback: next to the executable.
+    // Fallback: directory of the executable.
     Ok(exe
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."))
-        .join("models")
-        .join("parakeet-tdt-v3"))
+        .to_path_buf())
+}
+
+fn resolve_model_dir() -> Result<PathBuf> {
+    Ok(sidecar_root()?.join("models").join("parakeet-tdt-v3"))
+}
+
+/// Load variables from a `parakeet.env` file at repo root if present.
+/// Existing environment wins over file values so shell overrides still work.
+fn load_env_file() {
+    let Ok(root) = sidecar_root() else { return };
+    let candidates = [
+        root.parent().map(|p| p.join("parakeet.env")),
+        Some(root.join("parakeet.env")),
+    ];
+    for candidate in candidates.into_iter().flatten() {
+        if candidate.exists() {
+            match dotenvy::from_path(&candidate) {
+                Ok(()) => eprintln!("[sidecar] loaded env from {}", candidate.display()),
+                Err(e) => eprintln!("[sidecar] failed to load {}: {e}", candidate.display()),
+            }
+            return;
+        }
+    }
 }
 
 fn main() -> Result<()> {
+    load_env_file();
+
     let emitter = std::sync::Arc::new(Emitter::new());
     let shutdown = std::sync::Arc::new(AtomicBool::new(false));
 
