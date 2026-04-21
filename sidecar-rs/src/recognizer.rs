@@ -1,16 +1,17 @@
 use anyhow::Result;
 use crossbeam_channel::Receiver;
-use parakeet_rs::{ExecutionConfig, ExecutionProvider, ParakeetEOU};
+use parakeet_rs::{ExecutionConfig, ExecutionProvider, ParakeetTDT, Transcriber};
 use std::path::Path;
 use std::time::Instant;
 
 use crate::protocol::Event;
 
-const EOU_MARKER: &str = "[EOU]";
-const CHUNK_MS: f64 = 160.0;
-/// Flush the accumulator after this many consecutive empty fragments
-/// if the [EOU] marker never arrived.
-const SILENCE_FLUSH_CHUNKS: u32 = 4; // ~640 ms
+// Chunks arrive from the audio thread at 160 ms each (2560 f32 @ 16 kHz).
+const VAD_ENERGY_THRESHOLD: f32 = 0.005;
+const VAD_START_CHUNKS: u32 = 1;
+const VAD_END_CHUNKS: u32 = 5; // ~800 ms trailing silence
+const MIN_CHUNKS: u32 = 2; //   ~320 ms minimum phrase length
+const MAX_CHUNKS: u32 = 63; //  ~10 s maximum phrase
 
 pub fn run_recognizer<F: Fn(Event)>(
     model_dir: &Path,
@@ -18,83 +19,89 @@ pub fn run_recognizer<F: Fn(Event)>(
     emit: F,
 ) -> Result<()> {
     let config = ExecutionConfig::new().with_execution_provider(ExecutionProvider::Cpu);
-    let mut parakeet = ParakeetEOU::from_pretrained(model_dir, Some(config))?;
+    let mut parakeet = ParakeetTDT::from_pretrained(model_dir, Some(config))?;
 
-    let mut acc = String::new();
-    let mut empty_streak: u32 = 0;
-    let mut slow_warns: u32 = 0;
-    let mut chunk_count: u64 = 0;
-    let mut total_ms: f64 = 0.0;
-
-    let flush = |acc: &mut String, emit: &F| {
-        let phrase = sp_to_text(acc);
-        acc.clear();
-        if !phrase.is_empty() {
-            emit(Event::Phrase { text: phrase });
-        }
-    };
+    let mut buf: Vec<f32> = Vec::with_capacity(16_000 * 11);
+    let mut speaking = false;
+    let mut above_streak: u32 = 0;
+    let mut below_streak: u32 = 0;
+    let mut chunks_in_phrase: u32 = 0;
 
     while let Ok(chunk) = rx.recv() {
-        let t0 = Instant::now();
-        let fragment = match parakeet.transcribe(&chunk, true) {
-            Ok(t) => t,
-            Err(e) => {
-                emit(Event::Error {
-                    msg: format!("transcribe: {e}"),
-                });
-                continue;
-            }
-        };
-        let elapsed_ms = t0.elapsed().as_secs_f64() * 1000.0;
-        total_ms += elapsed_ms;
-        chunk_count += 1;
-        if elapsed_ms > CHUNK_MS && slow_warns < 10 {
-            eprintln!(
-                "[sidecar] slow chunk: {elapsed_ms:.1} ms (budget {CHUNK_MS:.0} ms, rtf={:.2})",
-                elapsed_ms / CHUNK_MS
-            );
-            slow_warns += 1;
-        }
-        if chunk_count.is_multiple_of(100) {
-            eprintln!(
-                "[sidecar] avg inference: {:.1} ms over {chunk_count} chunks (rtf={:.2})",
-                total_ms / chunk_count as f64,
-                (total_ms / chunk_count as f64) / CHUNK_MS
-            );
-        }
+        let r = rms(&chunk);
+        let loud = r >= VAD_ENERGY_THRESHOLD;
 
-        if fragment.is_empty() {
-            empty_streak = empty_streak.saturating_add(1);
-            if !acc.is_empty() && empty_streak >= SILENCE_FLUSH_CHUNKS {
-                flush(&mut acc, &emit);
-                empty_streak = 0;
+        if !speaking {
+            if loud {
+                above_streak += 1;
+                if above_streak >= VAD_START_CHUNKS {
+                    speaking = true;
+                    buf.clear();
+                    buf.extend_from_slice(&chunk);
+                    chunks_in_phrase = 1;
+                    above_streak = 0;
+                    below_streak = 0;
+                }
+            } else {
+                above_streak = 0;
             }
             continue;
         }
-        empty_streak = 0;
-        acc.push_str(&fragment);
 
-        // Flush complete phrases terminated by [EOU].
-        while let Some(idx) = acc.find(EOU_MARKER) {
-            let head: String = acc.drain(..idx).collect();
-            acc.drain(..EOU_MARKER.len()); // remove the marker itself
-            let phrase = sp_to_text(&head);
-            if !phrase.is_empty() {
-                emit(Event::Phrase { text: phrase });
-            }
+        // In an utterance.
+        buf.extend_from_slice(&chunk);
+        chunks_in_phrase += 1;
+        if loud {
+            below_streak = 0;
+        } else {
+            below_streak += 1;
         }
-    }
 
-    // Channel closed: flush any trailing phrase.
-    flush(&mut acc, &emit);
+        let ended = below_streak >= VAD_END_CHUNKS || chunks_in_phrase >= MAX_CHUNKS;
+        if !ended {
+            continue;
+        }
+
+        // End of utterance: hand the buffer to TDT.
+        speaking = false;
+        let count = chunks_in_phrase;
+        chunks_in_phrase = 0;
+        above_streak = 0;
+        below_streak = 0;
+
+        if count < MIN_CHUNKS {
+            buf.clear();
+            continue;
+        }
+
+        let audio = std::mem::take(&mut buf);
+        let dur_ms = audio.len() as u32 / 16; // 16 samples per ms at 16 kHz
+        let t0 = Instant::now();
+        match parakeet.transcribe_samples(audio, 16_000, 1, None) {
+            Ok(result) => {
+                let ms = t0.elapsed().as_millis();
+                let text = result.text.trim().to_string();
+                if !text.is_empty() {
+                    eprintln!("[sidecar] decoded {dur_ms} ms audio in {ms} ms -> {text:?}");
+                    emit(Event::Phrase { text });
+                } else {
+                    eprintln!("[sidecar] empty decode for {dur_ms} ms audio ({ms} ms)");
+                }
+            }
+            Err(e) => emit(Event::Error {
+                msg: format!("transcribe: {e}"),
+            }),
+        }
+        buf.reserve(16_000 * 11);
+    }
 
     Ok(())
 }
 
-/// Decode SentencePiece-style text: `▁` (U+2581) is a word boundary marker.
-fn sp_to_text(raw: &str) -> String {
-    let mut out = raw.replace('\u{2581}', " ");
-    // Collapse whitespace and trim.
-    out = out.split_whitespace().collect::<Vec<_>>().join(" ");
-    out
+fn rms(samples: &[f32]) -> f32 {
+    if samples.is_empty() {
+        return 0.0;
+    }
+    let sum_sq: f32 = samples.iter().map(|x| x * x).sum();
+    (sum_sq / samples.len() as f32).sqrt()
 }

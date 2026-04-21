@@ -44,12 +44,12 @@ impl Emitter {
 fn resolve_model_dir() -> Result<PathBuf> {
     // Binary lives at <repo>/sidecar-rs/target/release/parakeet-sidecar
     // Walk up until we find a dir containing "plugin" as a sibling; put models under
-    // <repo>/sidecar-rs/models/parakeet-eou.
+    // <repo>/sidecar-rs/models/parakeet-tdt-v3.
     let exe = std::env::current_exe().context("current_exe")?;
     let mut cur = exe.as_path();
     while let Some(parent) = cur.parent() {
         if parent.file_name().map(|n| n == "sidecar-rs").unwrap_or(false) {
-            return Ok(parent.join("models").join("parakeet-eou"));
+            return Ok(parent.join("models").join("parakeet-tdt-v3"));
         }
         cur = parent;
     }
@@ -58,7 +58,7 @@ fn resolve_model_dir() -> Result<PathBuf> {
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."))
         .join("models")
-        .join("parakeet-eou"))
+        .join("parakeet-tdt-v3"))
 }
 
 fn main() -> Result<()> {

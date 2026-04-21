@@ -3,9 +3,15 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-const HF_REPO: &str = "altunenes/parakeet-rs";
-const HF_SUBPATH: &str = "realtime_eou_120m-v1-onnx";
-const FILES: &[&str] = &["encoder.onnx", "decoder_joint.onnx", "tokenizer.json"];
+const HF_REPO: &str = "istupakov/parakeet-tdt-0.6b-v3-onnx";
+const FILES: &[&str] = &[
+    "config.json",
+    "encoder-model.onnx",
+    "encoder-model.onnx.data",
+    "decoder_joint-model.onnx",
+    "nemo128.onnx",
+    "vocab.txt",
+];
 
 pub fn ensure_model(dir: &Path) -> Result<PathBuf> {
     fs::create_dir_all(dir).with_context(|| format!("create_dir_all {}", dir.display()))?;
@@ -15,10 +21,7 @@ pub fn ensure_model(dir: &Path) -> Result<PathBuf> {
         if dst.exists() {
             continue;
         }
-        let url = format!(
-            "https://huggingface.co/{}/resolve/main/{}/{}",
-            HF_REPO, HF_SUBPATH, name
-        );
+        let url = format!("https://huggingface.co/{}/resolve/main/{}", HF_REPO, name);
         eprintln!("[sidecar] downloading {name} from {url}");
         download_to(&url, &dst)?;
     }
