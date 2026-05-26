@@ -79,6 +79,14 @@ class SidecarEngine(DummyEngine):
 
     def enable(self):
         self._log.info(f"{self.name}: enable")
+        # Exclusive activation: only one sidecar may capture the mic at a time,
+        # otherwise every utterance would be dispatched by both engines.
+        for other in _our_engines():
+            if other is not self and other._proc is not None:
+                try:
+                    other.disable()
+                except Exception:
+                    self._log.exception(f"{self.name}: failed to stop {other.name}")
         with self._lock:
             if self._proc and self._proc.poll() is None:
                 return
