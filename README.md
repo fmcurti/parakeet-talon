@@ -30,10 +30,11 @@ both are cross-platform (macOS, Windows, Linux).
 - `plugin/engine.py` runs in Talon's embedded Python. It registers one `SidecarEngine`
   (subclass of `AbstractEngine` via `DummyEngine`) per sidecar binary that exists on disk.
   On startup it activates the engine named by the `user.stt_default_engine` setting
-  (default `qwen`), spawning its sidecar. Switch at runtime with the **"use qwen"** /
-  **"use parakeet"** voice commands (the `user.stt_select_engine` action), which enables
-  the chosen sidecar and shuts the other down. (Talon's stock tray menu only lists the
-  active engine and installable built-ins, so engine selection is done here, not there.)
+  (default `qwen`), spawning its sidecar. Switch at runtime with the short voice codes in
+  `engine.talon` — **"use par"** / **"use para"** for parakeet, **"use Q"** for qwen —
+  via the `user.stt_select_engine` action, which enables the chosen sidecar and shuts the
+  other down. (Talon's stock tray menu only lists the active engine and installable
+  built-ins, so engine selection is done here, not there.)
 - `sidecar-rs/` is a Cargo workspace. The shared `core` crate handles mic capture (`cpal`),
   resampling to 16 kHz mono (`rubato`), energy-based VAD to slice utterances, the Talon
   JSON protocol, and model download. The `parakeet` and `qwen` binary crates each implement
@@ -79,10 +80,10 @@ The script:
 3. Falls back to `cargo build --release` if a prebuilt is missing, or if you pass
    `--build` / `-Build` / set `FORCE_BUILD=1`.
 
-Restart Talon after install. **qwen** activates by default; say **"use parakeet"** to
-switch engines and **"use qwen"** to switch back, or set `user.stt_default_engine` to
-change the startup default. On first use, each engine downloads its weights from Hugging
-Face into `sidecar-rs/models/`:
+Restart Talon after install. **qwen** activates by default; say **"use par"** (or
+**"use para"**) to switch to Parakeet and **"use Q"** to switch back, or set
+`user.stt_default_engine` to change the startup default. On first use, each engine
+downloads its weights from Hugging Face into `sidecar-rs/models/`:
 
 - parakeet → `parakeet-tdt-v3/` (~2.5 GB)
 - qwen → `qwen3-asr-0.6b/` (~1.7 GB)
@@ -138,8 +139,8 @@ Actions artifacts rather than release assets.
 - **"No speech engine loaded" / nothing transcribes**: check `~/.talon/talon.log` for
   `parakeet: registered engines [...]` and `parakeet: selected engine '…'`. If an engine is
   missing, its binary isn't under `sidecar-rs/target/release/` — re-run the install script or
-  `cargo build --release`. To force one, say **"use qwen"** / **"use parakeet"**, or set the
-  `user.stt_default_engine` setting.
+  `cargo build --release`. To force one, say **"use Q"** (qwen) / **"use par"** (parakeet),
+  or set the `user.stt_default_engine` setting.
 - **Phrases recognized but no action fires**: install the canonical command set with
   `git clone https://github.com/talonhub/community ~/.talon/user/community`.
 - **Double recognition after hot-reloading engine.py**: `_register_once()` closes any prior

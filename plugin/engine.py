@@ -7,8 +7,9 @@ each recognized phrase, routes text through speech_system so Talon's grammar and
 action pipeline runs unchanged.
 
 On startup the engine named by the `user.stt_default_engine` setting (default
-"qwen") is activated. Switch at runtime with the "use qwen" / "use parakeet"
-voice commands, or the `user.stt_select_engine` action.
+"qwen") is activated. Switch at runtime with the voice codes "use par"/"use para"
+(parakeet) and "use Q" (qwen) — see engine.talon — or the `user.stt_select_engine`
+action.
 
 Install via scripts/install.sh (macOS/Linux) or scripts/install.ps1 (Windows).
 """
@@ -338,8 +339,8 @@ def _register_once():
     log.info(f"parakeet: registered engines {registered}")
     # Activate the default engine on startup. Enabling an engine spawns its
     # sidecar and makes it the loaded/active engine; the others stay disabled.
-    # Switch at runtime with the "use qwen" / "use parakeet" voice commands
-    # (or the user.stt_select_engine action).
+    # Switch at runtime with the "par"/"para" and "Q" voice codes in
+    # engine.talon (or the user.stt_select_engine action).
     _select(_default_engine())
 
 
