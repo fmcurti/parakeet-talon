@@ -75,7 +75,7 @@ jobs:
         run: |
           foreach ($bin in @("parakeet-sidecar", "qwen-sidecar")) {
             $asset = "$bin-${{ matrix.plat }}.zip"
-            Compress-Archive -Path "$bin.exe" -DestinationPath $asset
+            Compress-Archive -Path "$bin.exe" -DestinationPath $asset -Force
             $hash = (Get-FileHash -Algorithm SHA256 $asset).Hash.ToLower()
             "$hash  $asset" | Out-File -Encoding ascii "$asset.sha256"
           }
