@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Install the Parakeet engine into Talon on macOS / Linux.
+# Install the local STT engines into Talon on macOS / Linux.
 # 1. Symlinks this repo's plugin/ into ~/.talon/user/parakeet.
-# 2. Downloads the prebuilt sidecar binary from the latest GitHub Release.
-#    If no release matches this platform, falls back to `cargo build --release`.
+# 2. Downloads the prebuilt sidecar binaries (parakeet + qwen) from the latest
+#    GitHub Release. If a prebuilt is missing, falls back to `cargo build
+#    --release` (which builds the whole workspace).
 #    Pass --build (or set FORCE_BUILD=1) to always build from source.
 
 set -euo pipefail
@@ -13,15 +14,19 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_dir="$(cd "$script_dir/.." && pwd)"
 plugin_src="$repo_dir/plugin"
 sidecar_dir="$repo_dir/sidecar-rs"
+release_dir="$sidecar_dir/target/release"
 talon_user="$HOME/.talon/user"
 target="$talon_user/parakeet"
+
+# Sidecar binaries to install (one per engine).
+BINS=(parakeet-sidecar qwen-sidecar)
 
 force_build=0
 for arg in "$@"; do
   case "$arg" in
     --build) force_build=1 ;;
     -h|--help)
-      sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'
       exit 0 ;;
   esac
 done
@@ -52,12 +57,11 @@ else
   echo "linked $target -> $plugin_src"
 fi
 
-# --- Resolve release asset for this platform ---
-detect_asset() {
-  local os arch
+# --- Resolve the platform os/arch tags used in release asset names ---
+platform_tag() {
+  local os arch os_tag arch_tag
   os="$(uname -s)"
   arch="$(uname -m)"
-  local os_tag arch_tag
   case "$os" in
     Darwin) os_tag="macos" ;;
     Linux)  os_tag="linux" ;;
@@ -68,19 +72,19 @@ detect_asset() {
     x86_64|amd64)  arch_tag="x86_64" ;;
     *) echo "error: unsupported arch: $arch" >&2; return 1 ;;
   esac
-  echo "parakeet-sidecar-${os_tag}-${arch_tag}.tar.gz"
+  echo "${os_tag}-${arch_tag}"
 }
 
-bin_out="$sidecar_dir/target/release/parakeet-sidecar"
-
 install_prebuilt() {
-  local asset url tmp
-  asset="$(detect_asset)" || return 1
+  # $1 = binary name (e.g. parakeet-sidecar)
+  local bin="$1" tag asset url tmp
+  tag="$(platform_tag)" || return 1
+  asset="${bin}-${tag}.tar.gz"
   url="https://github.com/${GH_REPO}/releases/latest/download/${asset}"
   tmp="$(mktemp -d)"
   echo "fetching $url"
   if ! curl -fLsS "$url" -o "$tmp/$asset"; then
-    echo "  prebuilt not available (repo may have no release yet)"
+    echo "  prebuilt not available for $bin"
     rm -rf "$tmp"
     return 1
   fi
@@ -91,15 +95,15 @@ install_prebuilt() {
       rm -rf "$tmp"; return 1
     }
   fi
-  mkdir -p "$sidecar_dir/target/release"
-  tar xzf "$tmp/$asset" -C "$sidecar_dir/target/release"
-  chmod +x "$bin_out"
+  mkdir -p "$release_dir"
+  tar xzf "$tmp/$asset" -C "$release_dir"
+  chmod +x "$release_dir/$bin"
   # Strip the macOS quarantine flag so it runs without "right-click Open" prompt.
   if [[ "$(uname -s)" == "Darwin" ]]; then
-    xattr -d com.apple.quarantine "$bin_out" 2>/dev/null || true
+    xattr -d com.apple.quarantine "$release_dir/$bin" 2>/dev/null || true
   fi
   rm -rf "$tmp"
-  echo "installed prebuilt binary: $bin_out"
+  echo "installed prebuilt binary: $release_dir/$bin"
 }
 
 build_from_source() {
@@ -108,23 +112,41 @@ build_from_source() {
     echo "       or ensure the prebuilt release is reachable." >&2
     exit 1
   fi
-  echo "building sidecar (cargo build --release)"
+  echo "building sidecars (cargo build --release)"
   ( cd "$sidecar_dir" && cargo build --release )
 }
 
 if [[ "$force_build" == "1" ]]; then
   build_from_source
 else
-  install_prebuilt || build_from_source
+  need_build=0
+  for bin in "${BINS[@]}"; do
+    install_prebuilt "$bin" || need_build=1
+  done
+  if [[ "$need_build" == "1" ]]; then
+    echo "one or more prebuilt binaries unavailable; building from source"
+    build_from_source
+  fi
 fi
 
-if [[ ! -x "$bin_out" ]]; then
-  echo "error: expected binary at $bin_out" >&2
+# --- Report what we ended up with ---
+present=()
+missing=()
+for bin in "${BINS[@]}"; do
+  if [[ -x "$release_dir/$bin" ]]; then present+=("$bin"); else missing+=("$bin"); fi
+done
+if [[ ${#present[@]} -eq 0 ]]; then
+  echo "error: no sidecar binaries were installed under $release_dir" >&2
   exit 1
 fi
 
 echo
 echo "done."
-echo "binary: $bin_out ($(du -h "$bin_out" | cut -f1))"
-echo "restart Talon (or 'touch $plugin_src/engine.py') to activate."
-echo "on first run the sidecar downloads ~2.5 GB of Parakeet model weights."
+for bin in "${present[@]}"; do
+  echo "binary: $release_dir/$bin ($(du -h "$release_dir/$bin" | cut -f1))"
+done
+if [[ ${#missing[@]} -gt 0 ]]; then
+  echo "note: missing ${missing[*]} (that engine won't appear in Talon)"
+fi
+echo "restart Talon (or 'touch $plugin_src/engine.py'), then pick an engine from the tray menu."
+echo "on first use each engine downloads its model: ~2.5 GB Parakeet, ~1.7 GB Qwen."

@@ -1,7 +1,8 @@
-# Install the Parakeet engine into Talon on Windows.
+# Install the local STT engines into Talon on Windows.
 # 1. Junction-links this repo's plugin\ into %APPDATA%\talon\user\parakeet.
-# 2. Downloads the prebuilt sidecar binary from the latest GitHub Release.
-#    If the download fails, falls back to `cargo build --release`.
+# 2. Downloads the prebuilt sidecar binaries (parakeet + qwen) from the latest
+#    GitHub Release. If a prebuilt is missing, falls back to `cargo build
+#    --release` (which builds the whole workspace).
 #    Pass -Build (or set FORCE_BUILD=1) to always build from source.
 #
 # Usage:  powershell -ExecutionPolicy Bypass -File scripts\install.ps1 [-Build]
@@ -18,9 +19,12 @@ $scriptDir  = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $repoDir    = (Resolve-Path (Join-Path $scriptDir "..")).Path
 $pluginSrc  = Join-Path $repoDir "plugin"
 $sidecarDir = Join-Path $repoDir "sidecar-rs"
+$releaseDir = Join-Path $sidecarDir "target\release"
 $talonUser  = Join-Path $env:APPDATA "talon\user"
 $target     = Join-Path $talonUser "parakeet"
-$binOut     = Join-Path $sidecarDir "target\release\parakeet-sidecar.exe"
+
+# Sidecar binaries to install (one per engine).
+$Bins = @("parakeet-sidecar", "qwen-sidecar")
 
 $forceBuild = $Build.IsPresent -or ($env:FORCE_BUILD -eq "1")
 
@@ -50,9 +54,10 @@ if (Test-Path $target) {
     Write-Host "linked $target -> $pluginSrc"
 }
 
-# --- Prebuilt binary ---
+# --- Prebuilt binary (per engine) ---
 function Install-Prebuilt {
-    $asset = "parakeet-sidecar-windows-x86_64.zip"
+    param([string]$Bin)
+    $asset = "$Bin-windows-x86_64.zip"
     $url   = "https://github.com/$GhRepo/releases/latest/download/$asset"
     $tmp   = New-Item -ItemType Directory -Force -Path (Join-Path $env:TEMP ("parakeet-install-" + [guid]::NewGuid()))
     Write-Host "fetching $url"
@@ -62,7 +67,7 @@ function Install-Prebuilt {
         Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile (Join-Path $tmp $asset)
         $ProgressPreference = $prev
     } catch {
-        Write-Host "  prebuilt not available (repo may have no release yet)"
+        Write-Host "  prebuilt not available for $Bin"
         Remove-Item -Recurse -Force $tmp
         return $false
     }
@@ -77,11 +82,10 @@ function Install-Prebuilt {
     } catch {
         # No checksum file; continue without verification.
     }
-    $releaseDir = Join-Path $sidecarDir "target\release"
     New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
     Expand-Archive -Path (Join-Path $tmp $asset) -DestinationPath $releaseDir -Force
     Remove-Item -Recurse -Force $tmp
-    Write-Host "installed prebuilt binary: $binOut"
+    Write-Host "installed prebuilt binary: $(Join-Path $releaseDir ($Bin + '.exe'))"
     return $true
 }
 
@@ -89,7 +93,7 @@ function Build-FromSource {
     if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
         Write-Error "cargo not on PATH. Either install Rust from https://rustup.rs, or ensure the prebuilt release is reachable."
     }
-    Write-Host "building sidecar (cargo build --release)"
+    Write-Host "building sidecars (cargo build --release)"
     Push-Location $sidecarDir
     try {
         & cargo build --release
@@ -102,16 +106,33 @@ function Build-FromSource {
 if ($forceBuild) {
     Build-FromSource
 } else {
-    if (-not (Install-Prebuilt)) {
+    $needBuild = $false
+    foreach ($bin in $Bins) {
+        if (-not (Install-Prebuilt -Bin $bin)) { $needBuild = $true }
+    }
+    if ($needBuild) {
+        Write-Host "one or more prebuilt binaries unavailable; building from source"
         Build-FromSource
     }
 }
 
-if (-not (Test-Path $binOut)) {
-    Write-Error "expected binary at $binOut"
+# --- Report what we ended up with ---
+$present = @()
+$missing = @()
+foreach ($bin in $Bins) {
+    if (Test-Path (Join-Path $releaseDir ($bin + ".exe"))) { $present += $bin } else { $missing += $bin }
+}
+if ($present.Count -eq 0) {
+    Write-Error "no sidecar binaries were installed under $releaseDir"
 }
 
 Write-Host ""
 Write-Host "done."
-Write-Host "binary: $binOut"
-Write-Host "restart Talon to activate. On first run the sidecar downloads ~2.5 GB of model weights."
+foreach ($bin in $present) {
+    Write-Host "binary: $(Join-Path $releaseDir ($bin + '.exe'))"
+}
+if ($missing.Count -gt 0) {
+    Write-Host "note: missing $($missing -join ', ') (that engine won't appear in Talon)"
+}
+Write-Host "restart Talon, then pick an engine from the tray menu."
+Write-Host "on first use each engine downloads its model: ~2.5 GB Parakeet, ~1.7 GB Qwen."

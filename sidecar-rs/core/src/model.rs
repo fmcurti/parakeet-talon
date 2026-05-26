@@ -3,25 +3,17 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-const HF_REPO: &str = "istupakov/parakeet-tdt-0.6b-v3-onnx";
-const FILES: &[&str] = &[
-    "config.json",
-    "encoder-model.onnx",
-    "encoder-model.onnx.data",
-    "decoder_joint-model.onnx",
-    "nemo128.onnx",
-    "vocab.txt",
-];
-
-pub fn ensure_model(dir: &Path) -> Result<PathBuf> {
+/// Ensure every `file` from a Hugging Face repo exists under `dir`, downloading
+/// any that are missing. Already-present files are left untouched.
+pub fn ensure_files(dir: &Path, hf_repo: &str, files: &[&str]) -> Result<PathBuf> {
     fs::create_dir_all(dir).with_context(|| format!("create_dir_all {}", dir.display()))?;
 
-    for name in FILES {
+    for name in files {
         let dst = dir.join(name);
         if dst.exists() {
             continue;
         }
-        let url = format!("https://huggingface.co/{}/resolve/main/{}", HF_REPO, name);
+        let url = format!("https://huggingface.co/{}/resolve/main/{}", hf_repo, name);
         eprintln!("[sidecar] downloading {name} from {url}");
         download_to(&url, &dst)?;
     }

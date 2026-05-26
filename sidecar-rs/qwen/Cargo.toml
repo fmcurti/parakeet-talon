@@ -1,0 +1,23 @@
+[package]
+name = "qwen-sidecar"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "qwen-sidecar"
+path = "src/main.rs"
+
+[dependencies]
+sidecar-core = { path = "../core" }
+anyhow = "1"
+env_logger = "0.11"
+
+# Qwen3-ASR inference (pure-Rust, candle-based). The `hub` feature provides
+# `from_pretrained`, which downloads the model and reconstructs tokenizer.json.
+# macOS builds use the default features (Metal); Linux/Windows use CPU so the
+# prebuilt binaries carry no GPU-runtime requirement.
+[target.'cfg(target_os = "macos")'.dependencies]
+qwen3-asr = { version = "0.2", features = ["hub"] }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+qwen3-asr = { version = "0.2", default-features = false, features = ["hub"] }

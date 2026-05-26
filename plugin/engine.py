@@ -1,13 +1,16 @@
 r"""
-Parakeet STT engine for Talon.
+Local STT engines for Talon.
 
-Registers a custom AbstractEngine subclass that delegates recognition to an
-external Rust sidecar (parakeet-rs based). On each recognized phrase, routes
-text through speech_system so Talon's grammar and action pipeline runs
-unchanged.
+Registers one custom AbstractEngine per available sidecar binary (parakeet,
+qwen). Each engine delegates recognition to its external Rust sidecar and, on
+each recognized phrase, routes text through speech_system so Talon's grammar and
+action pipeline runs unchanged.
+
+On startup the engine named by the `user.stt_default_engine` setting (default
+"qwen") is activated. Switch at runtime with the "use qwen" / "use parakeet"
+voice commands, or the `user.stt_select_engine` action.
 
 Install via scripts/install.sh (macOS/Linux) or scripts/install.ps1 (Windows).
-After install, restart Talon; the engine auto-registers and auto-picks.
 """
 
 import json
@@ -19,20 +22,33 @@ import threading
 import time
 from pathlib import Path
 
-from talon import speech_system
-from talon.engines import EngineStatus
+from talon import Module, settings, speech_system
 from talon.engines.dummy import DummyEngine
 
 log = logging.getLogger("parakeet")
 
+mod = Module()
+mod.setting(
+    "stt_default_engine",
+    type=str,
+    default="qwen",
+    desc="Local STT engine to activate on startup: 'parakeet' or 'qwen'.",
+)
+
 # Plugin lives at <repo>/plugin/engine.py (when installed via script, this path
 # is reached through a symlink at <talon_user>/parakeet). resolve() follows the
-# symlink so SIDECAR_BIN points inside the repo.
+# symlink so the sidecar paths point inside the repo.
 PLUGIN_DIR = Path(__file__).resolve().parent
 REPO_DIR = PLUGIN_DIR.parent
+RELEASE_DIR = REPO_DIR / "sidecar-rs" / "target" / "release"
+_EXE = ".exe" if sys.platform == "win32" else ""
 
-_BIN_NAME = "parakeet-sidecar.exe" if sys.platform == "win32" else "parakeet-sidecar"
-SIDECAR_BIN = REPO_DIR / "sidecar-rs" / "target" / "release" / _BIN_NAME
+# (engine name, sidecar binary path). An engine registers only if its binary
+# exists, so platforms without a given binary simply don't show that engine.
+ENGINES = [
+    ("parakeet", RELEASE_DIR / f"parakeet-sidecar{_EXE}"),
+    ("qwen", RELEASE_DIR / f"qwen-sidecar{_EXE}"),
+]
 
 _KEEP_RE = re.compile(r"[^a-z0-9\s-]+")
 _WS_RE = re.compile(r"\s+")
@@ -45,9 +61,11 @@ def _clean_phrase(text: str) -> str:
     return text
 
 
-class ParakeetEngine(DummyEngine):
-    def __init__(self):
-        super().__init__(name="parakeet", language="en_US")
+class SidecarEngine(DummyEngine):
+    def __init__(self, name: str, sidecar_bin: Path):
+        super().__init__(name=name, language="en_US")
+        self._bin = sidecar_bin
+        self._log = logging.getLogger(name)
         self._proc = None
         self._reader = None
         self._err_reader = None
@@ -57,17 +75,17 @@ class ParakeetEngine(DummyEngine):
         self._lock = threading.Lock()
 
     def __repr__(self):
-        return f"ParakeetEngine({self.name})"
+        return f"SidecarEngine({self.name})"
 
     def enable(self):
-        log.info("parakeet: enable")
+        self._log.info(f"{self.name}: enable")
         with self._lock:
             if self._proc and self._proc.poll() is None:
                 return
             self._spawn()
 
     def disable(self):
-        log.info("parakeet: disable")
+        self._log.info(f"{self.name}: disable")
         with self._lock:
             self._shutdown()
 
@@ -91,7 +109,7 @@ class ParakeetEngine(DummyEngine):
             pass
         name = getattr(device, "name", None) if device else None
         self._mic_name = name
-        log.info(f"parakeet: set_mic={name!r}")
+        self._log.info(f"{self.name}: set_mic={name!r}")
         self._send({"cmd": "set_mic", "name": name})
 
     def mimic(self, phrase):
@@ -102,18 +120,18 @@ class ParakeetEngine(DummyEngine):
         try:
             speech_system.mimic(text)
         except Exception:
-            log.exception("parakeet: mimic dispatch failed")
+            self._log.exception(f"{self.name}: mimic dispatch failed")
 
     def _spawn(self):
-        if not SIDECAR_BIN.exists():
-            log.error(
-                f"parakeet: sidecar binary missing at {SIDECAR_BIN}; "
+        if not self._bin.exists():
+            self._log.error(
+                f"{self.name}: sidecar binary missing at {self._bin}; "
                 f"run `cargo build --release` in {REPO_DIR / 'sidecar-rs'} or re-run the install script"
             )
             return
         try:
             self._proc = subprocess.Popen(
-                [str(SIDECAR_BIN)],
+                [str(self._bin)],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -122,7 +140,7 @@ class ParakeetEngine(DummyEngine):
                 cwd=str(PLUGIN_DIR),
             )
         except Exception:
-            log.exception("parakeet: failed to spawn sidecar")
+            self._log.exception(f"{self.name}: failed to spawn sidecar")
             self._proc = None
             return
         self._started_at = time.time()
@@ -133,7 +151,7 @@ class ParakeetEngine(DummyEngine):
         self._err_reader.start()
         if self._mic_name:
             self._send({"cmd": "set_mic", "name": self._mic_name})
-        log.info(f"parakeet: sidecar spawned pid={self._proc.pid}")
+        self._log.info(f"{self.name}: sidecar spawned pid={self._proc.pid}")
 
     def _shutdown(self):
         proc = self._proc
@@ -162,7 +180,7 @@ class ParakeetEngine(DummyEngine):
             proc.stdin.write(json.dumps(msg) + "\n")
             proc.stdin.flush()
         except Exception:
-            log.exception("parakeet: send failed")
+            self._log.exception(f"{self.name}: send failed")
 
     def _read_loop(self):
         proc = self._proc
@@ -175,7 +193,7 @@ class ParakeetEngine(DummyEngine):
             try:
                 msg = json.loads(line)
             except Exception:
-                log.debug(f"parakeet: non-json stdout: {line!r}")
+                self._log.debug(f"{self.name}: non-json stdout: {line!r}")
                 continue
             ev = msg.get("event")
             if ev == "phrase":
@@ -185,29 +203,31 @@ class ParakeetEngine(DummyEngine):
                     continue
                 cap, _flag = speech_system.parse(text)
                 if cap is None:
-                    log.info(f"parakeet: no-match {raw!r} -> {text!r}")
+                    self._log.info(f"{self.name}: no-match {raw!r} -> {text!r}")
                     continue
-                log.info(f"parakeet: matched {raw!r} -> {text!r}")
+                self._log.info(f"{self.name}: matched {raw!r} -> {text!r}")
                 try:
                     speech_system.mimic(text)
                 except Exception:
-                    log.exception("parakeet: dispatch failed")
+                    self._log.exception(f"{self.name}: dispatch failed")
             elif ev == "ready":
                 self._sidecar_ready = True
-                log.info("parakeet: sidecar ready")
+                self._log.info(f"{self.name}: sidecar ready")
+                # Refresh the tray menu and make this (the enabled) engine the
+                # active one now that its sidecar can transcribe.
                 try:
                     speech_system.dispatch("update_engines")
                 except Exception:
-                    log.exception("parakeet: update_engines dispatch failed")
+                    self._log.exception(f"{self.name}: update_engines dispatch failed")
                 try:
                     speech_system.pick_engine()
                 except Exception:
-                    log.exception("parakeet: pick_engine failed")
+                    self._log.exception(f"{self.name}: pick_engine failed")
             elif ev == "error":
-                log.error(f"parakeet: sidecar error: {msg.get('msg')}")
+                self._log.error(f"{self.name}: sidecar error: {msg.get('msg')}")
             else:
-                log.debug(f"parakeet: event {msg!r}")
-        log.info("parakeet: stdout closed")
+                self._log.debug(f"{self.name}: event {msg!r}")
+        self._log.info(f"{self.name}: stdout closed")
         self._sidecar_ready = False
 
     def _err_loop(self):
@@ -217,7 +237,60 @@ class ParakeetEngine(DummyEngine):
         for line in proc.stderr:
             line = line.rstrip()
             if line:
-                log.info(f"parakeet[stderr] {line}")
+                self._log.info(f"{self.name}[stderr] {line}")
+
+
+def _our_engines():
+    return [e for e in speech_system.engines.keys() if type(e).__name__ == "SidecarEngine"]
+
+
+def _default_engine() -> str:
+    try:
+        val = settings.get("user.stt_default_engine")
+        if val:
+            return str(val)
+    except Exception:
+        pass
+    return "qwen"
+
+
+def _select(name: str):
+    """Activate the named engine (spawning its sidecar) and disable the others."""
+    engines = _our_engines()
+    if not engines:
+        log.error("parakeet: no engines registered to select")
+        return
+    target = next((e for e in engines if e.name == name), None)
+    if target is None:
+        target = engines[0]
+        log.warning(f"parakeet: engine {name!r} not available; using {target.name!r}")
+    for e in engines:
+        proxy = speech_system.engines.get(e)
+        if proxy is None:
+            continue
+        try:
+            if e is target:
+                proxy.enable()
+            else:
+                proxy.disable()
+        except Exception:
+            log.exception(f"parakeet: enable/disable {e.name} failed")
+    try:
+        speech_system.dispatch("update_engines")
+    except Exception:
+        log.exception("parakeet: update_engines dispatch failed")
+    try:
+        speech_system.pick_engine()
+    except Exception:
+        log.exception("parakeet: pick_engine failed")
+    log.info(f"parakeet: selected engine {target.name!r}")
+
+
+@mod.action_class
+class Actions:
+    def stt_select_engine(name: str):
+        """Activate a local STT engine by name ('parakeet' or 'qwen')."""
+        _select(name)
 
 
 _REGISTERED = False
@@ -227,8 +300,9 @@ def _register_once():
     global _REGISTERED
     if _REGISTERED:
         return
+    # Drop any engines we registered on a previous import/reload.
     for old in list(speech_system.engines.keys()):
-        if type(old).__name__ == "ParakeetEngine":
+        if type(old).__name__ == "SidecarEngine":
             try:
                 old.close()
             except Exception:
@@ -237,23 +311,28 @@ def _register_once():
                 speech_system.remove_engine(old)
             except Exception:
                 pass
-    engine = ParakeetEngine()
-    speech_system.add_engine(engine)
+
+    registered = []
+    for name, sidecar_bin in ENGINES:
+        if not sidecar_bin.exists():
+            log.info(f"{name}: sidecar binary not found at {sidecar_bin}; skipping registration")
+            continue
+        speech_system.add_engine(SidecarEngine(name, sidecar_bin))
+        registered.append(name)
+
     _REGISTERED = True
-    log.info("parakeet: registered")
-    # Nudge the tray menu so the new engine shows up in the Active Engine dropdown.
-    # On some builds `add_engine` doesn't auto-fire `update_engines`, and the menu
-    # stays stale until Talon restarts.
-    try:
-        speech_system.dispatch("update_engines")
-    except Exception:
-        log.exception("parakeet: update_engines dispatch failed")
-    proxy = speech_system.engines.get(engine)
-    if proxy is not None:
-        try:
-            proxy.enable()
-        except Exception:
-            log.exception("parakeet: auto-enable failed")
+    if not registered:
+        log.error(
+            "parakeet: no sidecar binaries found; build them in "
+            f"{REPO_DIR / 'sidecar-rs'} or re-run the install script"
+        )
+        return
+    log.info(f"parakeet: registered engines {registered}")
+    # Activate the default engine on startup. Enabling an engine spawns its
+    # sidecar and makes it the loaded/active engine; the others stay disabled.
+    # Switch at runtime with the "use qwen" / "use parakeet" voice commands
+    # (or the user.stt_select_engine action).
+    _select(_default_engine())
 
 
 _register_once()

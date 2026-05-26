@@ -1,20 +1,16 @@
-mod audio;
-mod model;
-mod protocol;
-mod recognizer;
-
 use anyhow::{Context, Result};
-use crossbeam_channel::{bounded, Sender};
+use crossbeam_channel::bounded;
 use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Mutex,
+    Arc, Mutex,
 };
 use std::thread;
 
-use crate::audio::AudioStream;
+use crate::audio::{self, AudioStream};
 use crate::protocol::{Command, Event};
+use crate::recognizer::{self, Transcriber};
 
 struct Emitter {
     out: Mutex<std::io::Stdout>,
@@ -42,7 +38,7 @@ impl Emitter {
 }
 
 /// Return the sidecar-rs directory, found by walking up from the binary.
-fn sidecar_root() -> Result<PathBuf> {
+pub fn sidecar_root() -> Result<PathBuf> {
     let exe = std::env::current_exe().context("current_exe")?;
     let mut cur = exe.as_path();
     while let Some(parent) = cur.parent() {
@@ -54,12 +50,13 @@ fn sidecar_root() -> Result<PathBuf> {
     // Fallback: directory of the executable.
     Ok(exe
         .parent()
-        .unwrap_or_else(|| std::path::Path::new("."))
+        .unwrap_or_else(|| Path::new("."))
         .to_path_buf())
 }
 
-fn resolve_model_dir() -> Result<PathBuf> {
-    Ok(sidecar_root()?.join("models").join("parakeet-tdt-v3"))
+/// Resolve a model directory (`sidecar-rs/models/<name>`) for an engine.
+pub fn model_dir(name: &str) -> Result<PathBuf> {
+    Ok(sidecar_root()?.join("models").join(name))
 }
 
 /// Load variables from a `parakeet.env` file at repo root if present.
@@ -81,34 +78,27 @@ fn load_env_file() {
     }
 }
 
-fn main() -> Result<()> {
+/// Run the sidecar: start audio capture, build the transcriber on a worker
+/// thread, and process JSON commands from stdin.
+///
+/// `init` runs inside the recognizer thread and is responsible for acquiring
+/// the model (download if needed) and loading it. It runs there — rather than
+/// before the initial `ready` event — so a slow first-run download or model
+/// load does not block startup, and so backends whose handles are not `Send`
+/// (e.g. a GPU device) never cross threads.
+pub fn run(
+    init: impl FnOnce() -> Result<Box<dyn Transcriber>> + Send + 'static,
+) -> Result<()> {
     load_env_file();
 
-    let emitter = std::sync::Arc::new(Emitter::new());
-    let shutdown = std::sync::Arc::new(AtomicBool::new(false));
-
-    // Resolve + fetch model
-    let model_dir = match resolve_model_dir() {
-        Ok(p) => p,
-        Err(e) => {
-            emitter.emit(Event::Error {
-                msg: format!("model dir: {e}"),
-            });
-            return Ok(());
-        }
-    };
-    if let Err(e) = model::ensure_model(&model_dir) {
-        emitter.emit(Event::Error {
-            msg: format!("model download failed: {e}"),
-        });
-        return Ok(());
-    }
+    let emitter = Arc::new(Emitter::new());
+    let shutdown = Arc::new(AtomicBool::new(false));
 
     // Audio → recognizer channel
     let (audio_tx, audio_rx) = bounded::<Vec<f32>>(32);
 
     // Start default capture; a later set_mic can replace it.
-    let audio_stream = std::sync::Arc::new(Mutex::new(None::<AudioStream>));
+    let audio_stream = Arc::new(Mutex::new(None::<AudioStream>));
     match audio::start_capture(None, audio_tx.clone()) {
         Ok(s) => {
             *audio_stream.lock().unwrap() = Some(s);
@@ -118,13 +108,19 @@ fn main() -> Result<()> {
         }),
     }
 
-    // Recognizer thread
+    // Recognizer thread: build the transcriber, then run the VAD loop.
     let emit_rec = emitter.clone();
-    let model_dir_rec = model_dir.clone();
     let rec_handle = thread::spawn(move || {
-        if let Err(e) = recognizer::run_recognizer(&model_dir_rec, audio_rx, |ev| {
-            emit_rec.emit(ev)
-        }) {
+        let transcriber = match init() {
+            Ok(t) => t,
+            Err(e) => {
+                emit_rec.emit(Event::Error {
+                    msg: format!("model init: {e}"),
+                });
+                return;
+            }
+        };
+        if let Err(e) = recognizer::run_recognizer(transcriber, audio_rx, |ev| emit_rec.emit(ev)) {
             emit_rec.emit(Event::Error {
                 msg: format!("recognizer: {e}"),
             });
@@ -177,7 +173,3 @@ fn main() -> Result<()> {
     let _ = rec_handle.join();
     Ok(())
 }
-
-// Silence warnings for unused imports on non-stream code paths.
-#[allow(dead_code)]
-fn _unused_sender<T>(_: &Sender<T>) {}

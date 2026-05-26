@@ -1,10 +1,15 @@
 use anyhow::Result;
 use crossbeam_channel::Receiver;
-use parakeet_rs::{ExecutionConfig, ExecutionProvider, ParakeetTDT, Transcriber};
-use std::path::Path;
 use std::time::Instant;
 
 use crate::protocol::Event;
+
+/// A speech-to-text backend. Implemented per engine binary (parakeet, qwen).
+/// `transcribe` receives one VAD-segmented utterance as mono f32 @ 16 kHz and
+/// returns the recognized text (empty string if nothing was recognized).
+pub trait Transcriber {
+    fn transcribe(&mut self, samples: &[f32]) -> Result<String>;
+}
 
 // Chunks arrive from the audio thread at 160 ms each (2560 f32 @ 16 kHz).
 const CHUNK_MS: u32 = 160;
@@ -62,14 +67,14 @@ fn ms_to_chunks(ms: u32) -> u32 {
     ms.div_ceil(CHUNK_MS)
 }
 
+/// Drive VAD over incoming audio chunks, handing each detected utterance to the
+/// transcriber and emitting the resulting phrase.
 pub fn run_recognizer<F: Fn(Event)>(
-    model_dir: &Path,
+    mut transcriber: Box<dyn Transcriber>,
     rx: Receiver<Vec<f32>>,
     emit: F,
 ) -> Result<()> {
     let vad = VadParams::from_env();
-    let config = ExecutionConfig::new().with_execution_provider(ExecutionProvider::Cpu);
-    let mut parakeet = ParakeetTDT::from_pretrained(model_dir, Some(config))?;
 
     let mut buf: Vec<f32> = Vec::with_capacity(16_000 * 11);
     let mut speaking = false;
@@ -112,7 +117,7 @@ pub fn run_recognizer<F: Fn(Event)>(
             continue;
         }
 
-        // End of utterance: hand the buffer to TDT.
+        // End of utterance: hand the buffer to the transcriber.
         speaking = false;
         let count = chunks_in_phrase;
         chunks_in_phrase = 0;
@@ -127,10 +132,10 @@ pub fn run_recognizer<F: Fn(Event)>(
         let audio = std::mem::take(&mut buf);
         let dur_ms = audio.len() as u32 / 16; // 16 samples per ms at 16 kHz
         let t0 = Instant::now();
-        match parakeet.transcribe_samples(audio, 16_000, 1, None) {
-            Ok(result) => {
+        match transcriber.transcribe(&audio) {
+            Ok(text) => {
                 let ms = t0.elapsed().as_millis();
-                let text = result.text.trim().to_string();
+                let text = text.trim().to_string();
                 if !text.is_empty() {
                     eprintln!("[sidecar] decoded {dur_ms} ms audio in {ms} ms -> {text:?}");
                     emit(Event::Phrase { text });

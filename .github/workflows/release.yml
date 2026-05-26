@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   build:
-    name: ${{ matrix.target }}
+    name: ${{ matrix.plat }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -18,23 +18,19 @@ jobs:
         include:
           - os: macos-14
             target: aarch64-apple-darwin
-            asset: parakeet-sidecar-macos-aarch64.tar.gz
-            bin: parakeet-sidecar
+            plat: macos-aarch64
             archive: tar
           - os: macos-13
             target: x86_64-apple-darwin
-            asset: parakeet-sidecar-macos-x86_64.tar.gz
-            bin: parakeet-sidecar
+            plat: macos-x86_64
             archive: tar
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
-            asset: parakeet-sidecar-linux-x86_64.tar.gz
-            bin: parakeet-sidecar
+            plat: linux-x86_64
             archive: tar
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            asset: parakeet-sidecar-windows-x86_64.zip
-            bin: parakeet-sidecar.exe
+            plat: windows-x86_64
             archive: zip
 
     steps:
@@ -58,7 +54,7 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
 
-      - name: Build
+      - name: Build workspace (both sidecars)
         working-directory: sidecar-rs
         run: cargo build --release --target ${{ matrix.target }}
 
@@ -66,31 +62,41 @@ jobs:
         if: matrix.archive == 'tar'
         working-directory: sidecar-rs/target/${{ matrix.target }}/release
         run: |
-          tar czf "${{ matrix.asset }}" "${{ matrix.bin }}"
-          shasum -a 256 "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256"
+          for bin in parakeet-sidecar qwen-sidecar; do
+            asset="${bin}-${{ matrix.plat }}.tar.gz"
+            tar czf "$asset" "$bin"
+            shasum -a 256 "$asset" > "$asset.sha256"
+          done
 
       - name: Package (zip)
         if: matrix.archive == 'zip'
         working-directory: sidecar-rs/target/${{ matrix.target }}/release
         shell: pwsh
         run: |
-          Compress-Archive -Path "${{ matrix.bin }}" -DestinationPath "${{ matrix.asset }}"
-          $hash = (Get-FileHash -Algorithm SHA256 "${{ matrix.asset }}").Hash.ToLower()
-          "$hash  ${{ matrix.asset }}" | Out-File -Encoding ascii "${{ matrix.asset }}.sha256"
+          foreach ($bin in @("parakeet-sidecar", "qwen-sidecar")) {
+            $asset = "$bin-${{ matrix.plat }}.zip"
+            Compress-Archive -Path "$bin.exe" -DestinationPath $asset
+            $hash = (Get-FileHash -Algorithm SHA256 $asset).Hash.ToLower()
+            "$hash  $asset" | Out-File -Encoding ascii "$asset.sha256"
+          }
 
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/v')
         with:
           files: |
-            sidecar-rs/target/${{ matrix.target }}/release/${{ matrix.asset }}
-            sidecar-rs/target/${{ matrix.target }}/release/${{ matrix.asset }}.sha256
-          fail_on_unmatched_files: true
+            sidecar-rs/target/${{ matrix.target }}/release/*-sidecar-${{ matrix.plat }}.tar.gz
+            sidecar-rs/target/${{ matrix.target }}/release/*-sidecar-${{ matrix.plat }}.tar.gz.sha256
+            sidecar-rs/target/${{ matrix.target }}/release/*-sidecar-${{ matrix.plat }}.zip
+            sidecar-rs/target/${{ matrix.target }}/release/*-sidecar-${{ matrix.plat }}.zip.sha256
+          fail_on_unmatched_files: false
           generate_release_notes: true
 
-      - name: Upload artifact (non-tag runs)
+      - name: Upload artifacts (non-tag runs)
         uses: actions/upload-artifact@v4
         if: "!startsWith(github.ref, 'refs/tags/v')"
         with:
-          name: ${{ matrix.asset }}
-          path: sidecar-rs/target/${{ matrix.target }}/release/${{ matrix.asset }}*
+          name: sidecars-${{ matrix.plat }}
+          path: |
+            sidecar-rs/target/${{ matrix.target }}/release/*-sidecar-${{ matrix.plat }}.tar.gz*
+            sidecar-rs/target/${{ matrix.target }}/release/*-sidecar-${{ matrix.plat }}.zip*
