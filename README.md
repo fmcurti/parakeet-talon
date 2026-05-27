@@ -9,7 +9,7 @@ startup and you switch between them with voice commands:
   ONNX Runtime.
 - **qwen** — [Qwen3-ASR 0.6B](https://huggingface.co/Qwen/Qwen3-ASR-0.6B) (int8) via
   [`sherpa-onnx`](https://github.com/k2-fsa/sherpa-onnx) on ONNX Runtime. Runs fast on CPU
-  across all platforms; language is auto-detected.
+  across all platforms; language is forced to English by default (`QWEN_LANGUAGE`).
 
 Both feed recognized phrases into Talon's grammar pipeline via `speech_system.mimic()`, and
 both are cross-platform (macOS, Windows, Linux).
@@ -111,7 +111,11 @@ is commented out by default; uncomment a line to override. Resolved values print
 | `PARAKEET_VAD_MIN_MS` | 320 | Discard utterances shorter than this |
 | `PARAKEET_VAD_MAX_MS` | 10000 | Force-commit long utterances |
 
-(The qwen engine auto-detects language; it has no language-forcing knob.)
+The qwen engine has one extra knob:
+
+| Variable | Default | What it does |
+|---|---|---|
+| `QWEN_LANGUAGE` | english | Language the Qwen decoder is forced to (Talon commands are English). A language name like `spanish` forces that instead; `auto` re-enables per-utterance detection |
 
 Shell/system env vars take precedence over the file so one-off overrides work without
 editing it.

@@ -13,6 +13,8 @@ const MODEL_URL: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download
 
 struct QwenTranscriber {
     recognizer: OfflineRecognizer,
+    /// Forced language name (e.g. "English"); `None` = let the model auto-detect.
+    language: Option<String>,
 }
 
 impl QwenTranscriber {
@@ -20,7 +22,6 @@ impl QwenTranscriber {
         let model_dir = ensure_model(models_root)?;
         let path = |name: &str| model_dir.join(name).to_string_lossy().into_owned();
 
-        // sherpa auto-detects language; Qwen3-ASR has no forced-language option.
         let mut config = OfflineRecognizerConfig::default();
         config.model_config.qwen3_asr.conv_frontend = Some(path("conv_frontend.onnx"));
         config.model_config.qwen3_asr.encoder = Some(path("encoder.int8.onnx"));
@@ -30,22 +31,51 @@ impl QwenTranscriber {
 
         let recognizer = OfflineRecognizer::create(&config)
             .ok_or_else(|| anyhow!("failed to create sherpa-onnx Qwen3-ASR recognizer"))?;
+
+        let language = forced_language();
+        match &language {
+            Some(l) => eprintln!("[sidecar] qwen: forcing language {l:?}"),
+            None => eprintln!("[sidecar] qwen: language auto-detect"),
+        }
         eprintln!(
             "[sidecar] qwen: sherpa-onnx recognizer ready ({} threads)",
             config.model_config.num_threads
         );
-        Ok(Self { recognizer })
+        Ok(Self {
+            recognizer,
+            language,
+        })
     }
 }
 
 impl Transcriber for QwenTranscriber {
     fn transcribe(&mut self, samples: &[f32]) -> Result<String> {
         let stream = self.recognizer.create_stream();
+        // Force the decoder's language token (Qwen3-ASR prepends "language <X>"
+        // to the prompt); otherwise it auto-detects and may misfire on short
+        // English commands.
+        if let Some(lang) = &self.language {
+            stream.set_option("language", lang);
+        }
         stream.accept_waveform(16_000, samples);
         self.recognizer.decode(&stream);
         let text = stream.get_result().map(|r| r.text).unwrap_or_default();
         Ok(text.trim().to_string())
     }
+}
+
+/// Language to force on the decoder. Defaults to English; override with the
+/// `QWEN_LANGUAGE` env var (a language name like "spanish", or "auto"/empty to
+/// let the model auto-detect). The model expects a capitalized name ("English").
+fn forced_language() -> Option<String> {
+    let raw = std::env::var("QWEN_LANGUAGE").unwrap_or_else(|_| "english".to_string());
+    let raw = raw.trim();
+    if raw.is_empty() || raw.eq_ignore_ascii_case("auto") {
+        return None;
+    }
+    let mut chars = raw.chars();
+    let first = chars.next().unwrap().to_uppercase().collect::<String>();
+    Some(format!("{first}{}", chars.as_str().to_lowercase()))
 }
 
 fn num_threads() -> i32 {
