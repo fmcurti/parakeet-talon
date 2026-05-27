@@ -20,7 +20,9 @@ pub fn ensure_files(dir: &Path, hf_repo: &str, files: &[&str]) -> Result<PathBuf
     Ok(dir.to_path_buf())
 }
 
-fn download_to(url: &str, dst: &Path) -> Result<()> {
+/// Stream `url` to `dst`, logging progress. Public so engine bins can fetch
+/// non-Hugging-Face artifacts (e.g. a model tarball).
+pub fn download_to(url: &str, dst: &Path) -> Result<()> {
     let tmp = dst.with_extension("download");
     let client = reqwest::blocking::Client::builder()
         .user_agent("parakeet-sidecar/0.1")

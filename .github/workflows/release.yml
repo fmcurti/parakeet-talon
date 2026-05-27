@@ -24,7 +24,7 @@ jobs:
             target: x86_64-apple-darwin
             plat: macos-x86_64
             archive: tar
-          - os: ubuntu-22.04
+          - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             plat: linux-x86_64
             archive: tar

@@ -7,9 +7,9 @@ startup and you switch between them with voice commands:
 - **parakeet** — [NVIDIA Parakeet-TDT v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3)
   via [`parakeet-rs`](https://github.com/altunenes/parakeet-rs) on the `ort` bindings to
   ONNX Runtime.
-- **qwen** — [Qwen3-ASR 0.6B](https://huggingface.co/Qwen/Qwen3-ASR-0.6B) via the pure-Rust
-  [`qwen3-asr`](https://github.com/alan890104/qwen3-asr-rs) crate (candle). Uses Metal on
-  macOS and CPU on Linux/Windows.
+- **qwen** — [Qwen3-ASR 0.6B](https://huggingface.co/Qwen/Qwen3-ASR-0.6B) (int8) via
+  [`sherpa-onnx`](https://github.com/k2-fsa/sherpa-onnx) on ONNX Runtime. Runs fast on CPU
+  across all platforms; language is auto-detected.
 
 Both feed recognized phrases into Talon's grammar pipeline via `speech_system.mimic()`, and
 both are cross-platform (macOS, Windows, Linux).
@@ -45,7 +45,7 @@ both are cross-platform (macOS, Windows, Linux).
 sidecar-rs/
   core/       shared audio + VAD + protocol + model download
   parakeet/   parakeet-sidecar  (parakeet-rs / ONNX Runtime)
-  qwen/       qwen-sidecar      (qwen3-asr / candle)
+  qwen/       qwen-sidecar      (sherpa-onnx / ONNX Runtime, int8)
 ```
 
 ## Install
@@ -83,10 +83,11 @@ The script:
 Restart Talon after install. **qwen** activates by default; say **"use par"** (or
 **"use para"**) to switch to Parakeet and **"use Q"** to switch back, or set
 `user.stt_default_engine` to change the startup default. On first use, each engine
-downloads its weights from Hugging Face into `sidecar-rs/models/`:
+downloads its model into `sidecar-rs/models/`:
 
-- parakeet → `parakeet-tdt-v3/` (~2.5 GB)
-- qwen → `qwen3-asr-0.6b/` (~1.7 GB)
+- parakeet → `parakeet-tdt-v3/` (~2.5 GB, from Hugging Face)
+- qwen → `sherpa-onnx-qwen3-asr-0.6B-int8-…/` (~850 MB download, ~1 GB on disk, from the
+  sherpa-onnx releases)
 
 ### Unsigned-binary notes
 
@@ -110,11 +111,7 @@ is commented out by default; uncomment a line to override. Resolved values print
 | `PARAKEET_VAD_MIN_MS` | 320 | Discard utterances shorter than this |
 | `PARAKEET_VAD_MAX_MS` | 10000 | Force-commit long utterances |
 
-The qwen engine has one extra knob:
-
-| Variable | Default | What it does |
-|---|---|---|
-| `QWEN_LANGUAGE` | english | Language forced on the Qwen decoder. A lowercase language name (e.g. `spanish`) forces it; `auto` enables per-utterance detection |
+(The qwen engine auto-detects language; it has no language-forcing knob.)
 
 Shell/system env vars take precedence over the file so one-off overrides work without
 editing it.

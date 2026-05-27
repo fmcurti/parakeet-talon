@@ -8,7 +8,7 @@ pub mod protocol;
 pub mod recognizer;
 pub mod runtime;
 
-pub use model::ensure_files;
+pub use model::{download_to, ensure_files};
 pub use protocol::{Command, Event};
 pub use recognizer::Transcriber;
 pub use runtime::{model_dir, run, sidecar_root};
