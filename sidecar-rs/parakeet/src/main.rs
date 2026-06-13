@@ -5,7 +5,7 @@ use parakeet_rs::{ExecutionConfig, ExecutionProvider, ParakeetTDT, Transcriber a
 use sidecar_core::Transcriber;
 use std::path::Path;
 
-const HF_REPO: &str = "istupakov/parakeet-tdt-0.6b-v3-onnx";
+const HF_REPO: &str = "istupakov/parakeet-tdt-0.6b-v2-onnx";
 const FILES: &[&str] = &[
     "config.json",
     "encoder-model.onnx",
@@ -36,7 +36,7 @@ impl Transcriber for ParakeetTranscriber {
 
 fn main() -> Result<()> {
     sidecar_core::run(|| {
-        let dir = sidecar_core::model_dir("parakeet-tdt-v3")?;
+        let dir = sidecar_core::model_dir("parakeet-tdt-v2")?;
         sidecar_core::ensure_files(&dir, HF_REPO, FILES)?;
         let t: Box<dyn Transcriber> = Box::new(ParakeetTranscriber::new(&dir)?);
         Ok(t)

@@ -4,9 +4,9 @@ Custom [Talon](https://talonvoice.com) speech engines backed by local, native Ru
 sidecars. Two transcription engines ship side by side; the default activates on
 startup and you switch between them with voice commands:
 
-- **parakeet** — [NVIDIA Parakeet-TDT v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3)
-  via [`parakeet-rs`](https://github.com/altunenes/parakeet-rs) on the `ort` bindings to
-  ONNX Runtime.
+- **parakeet** — [NVIDIA Parakeet-TDT v2](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2)
+  (English-only) via [`parakeet-rs`](https://github.com/altunenes/parakeet-rs) on the `ort`
+  bindings to ONNX Runtime.
 - **qwen** — [Qwen3-ASR 0.6B](https://huggingface.co/Qwen/Qwen3-ASR-0.6B) (int8) via
   [`sherpa-onnx`](https://github.com/k2-fsa/sherpa-onnx) on ONNX Runtime. Runs fast on CPU
   across all platforms; language is forced to English by default (`QWEN_LANGUAGE`).
@@ -85,7 +85,7 @@ Restart Talon after install. **qwen** activates by default; say **"use par"** (o
 `user.stt_default_engine` to change the startup default. On first use, each engine
 downloads its model into `sidecar-rs/models/`:
 
-- parakeet → `parakeet-tdt-v3/` (~2.5 GB, from Hugging Face)
+- parakeet → `parakeet-tdt-v2/` (~2.5 GB, from Hugging Face)
 - qwen → `sherpa-onnx-qwen3-asr-0.6B-int8-…/` (~850 MB download, ~1 GB on disk, from the
   sherpa-onnx releases)
 
