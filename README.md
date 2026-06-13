@@ -105,11 +105,12 @@ is commented out by default; uncomment a line to override. Resolved values print
 
 | Variable | Default | What it does |
 |---|---|---|
-| `PARAKEET_VAD_THRESHOLD` | 0.005 | Mic energy floor |
+| `PARAKEET_VAD_THRESHOLD` | 0.005 | Mic energy floor (checked per 32 ms window, so a word starting mid-chunk still triggers) |
 | `PARAKEET_VAD_START_MS` | 160 | Speech needed before a phrase opens |
 | `PARAKEET_VAD_END_MS` | 800 | Trailing silence before we decode — main latency knob |
-| `PARAKEET_VAD_MIN_MS` | 320 | Discard utterances shorter than this |
+| `PARAKEET_VAD_MIN_MS` | 320 | Discard phrases with less speech than this (trailing silence doesn't count) |
 | `PARAKEET_VAD_MAX_MS` | 10000 | Force-commit long utterances |
+| `PARAKEET_VAD_PREROLL_MS` | 320 | Audio kept from before the trigger and prepended to the phrase, so quiet word onsets aren't clipped |
 
 The qwen engine has one extra knob:
 
